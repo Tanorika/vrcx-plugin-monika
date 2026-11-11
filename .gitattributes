@@ -1,0 +1,6 @@
+* text=auto eol=lf
+
+# Preserve upstream snapshot and fixture bytes for SHA-256 verification on every OS.
+vendor/vrcx/src/** -text
+tests/fixtures/framework-fixed.js -text
+docs/screenshots/*.jpg -text

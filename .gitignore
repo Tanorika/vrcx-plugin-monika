@@ -1,0 +1,22 @@
+# Local accounts, sessions, recovery backups and logs
+/data/
+/.preview-data/
+*.log
+*.tmp
+
+# Dependencies and generated build/release output
+/node_modules/
+/dist/
+/releases/
+/coverage/
+
+# Local reference checkouts; independent repositories, never part of Monika
+/VRCX/
+/vrcx-plugin-system/
+/vrcx-plugin-system-fixed/
+
+# Editor and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

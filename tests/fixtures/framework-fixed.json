@@ -1,0 +1,8 @@
+{
+  "name": "vrcx-plugin-system-fixed",
+  "version": "3.1.0-fixed.1",
+  "sourceCommit": "bdce6d3",
+  "upstream": "https://github.com/vrcx-plugin-system/vrcx-plugin-system",
+  "sha256": "d72b39a5d93d6cdcbb148890998a566ee23ce3cd9bd4ff38344fffdf30c37506",
+  "purpose": "Pinned compatibility test and synthetic preview fixture. Not part of the Monika runtime distribution."
+}
