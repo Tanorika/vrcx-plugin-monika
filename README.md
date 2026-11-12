@@ -2,7 +2,7 @@
 
 ### 👁我会永远实践你👁
 
-Monika 是运行于 **VRCX Plugin System Fixed** 的目标账号活动记录插件。它通过独立的 VRChat API请求观察目标账号及其可见好友，在 VRCX 中查看活动历史、实例人数、模型变化和社交资料。
+Monika 是运行于 [VRCX Plugin System Fixed](https://github.com/Tanorika/vrcx-plugin-system-fixed) 的目标账号活动记录插件。它通过独立的 VRChat API请求观察目标账号及其可见好友，在 VRCX 中查看活动历史、实例人数、模型变化和社交资料。
 
 当前版本：**0.1.22**。
 安装由两个部分组成：VRCX 中的单文件插件 `monika.js`，以及持续运行的 Node.js 本地服务。
