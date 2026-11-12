@@ -1,6 +1,6 @@
-# Monika for VRCX
+# Monika for VRCX ~~👁我会永远实践你👁~~
 
-### 👁我会永远实践你👁
+
 
 Monika 是运行于 [VRCX Plugin System Fixed](https://github.com/Tanorika/vrcx-plugin-system-fixed) 的目标账号活动记录插件。它通过独立的 VRChat API请求观察目标账号及其可见好友，在 VRCX 中查看活动历史、实例人数、模型变化和社交资料。
 
@@ -98,15 +98,13 @@ npm start
 - 常去世界统计默认折叠；历史条目可展开、分页查看。
 - 同一目标账号在多个客户端活动时，已观察到的不同实例可以并行存在，每个实例独立维护人员、模型和人数采样。
 
-在线时长合并重叠活动区间，避免把并行时间重复计算；各实例的累计时长按各自区间统计。短时间返回相同实例可合并原活动，超过合并间隔后再出现则形成新段。没有客户端标识时，判断依据是云端报告的完整实例位置。
-
 ![活动历史与并行实例（合成数据）](docs/screenshots/activity.jpg)
 
 ### 实例人数、可见人员和模型历史
 
 展开活动条目，使用 **所有 / 加入实例 / 离开实例 / 模型变化 / 图表** 查看事件或图表。
 
-房间人数时间轴显示 API 总人数、可见人数、未识别人数估算和未知缺口，并统计有效样本的最后人数、峰值与平均人数。下方的可见好友时间轴按人员合并多次进出，保留进入时与最后人员快照，便于对照变化。
+房间人数时间轴显示 API 总人数、可见人数、未识别人数估算和未知缺口，并统计有效样本的最后人数、峰值与平均人数。保留进入时与最后人员快照，便于对照变化。
 ##### 请注意，可见人数指的是目标账号的好友，且状态为JoinMe/Online即位置可见状态
 
 ![房间人数与可见好友时间轴（合成数据）](docs/screenshots/instance.jpg)
@@ -250,7 +248,7 @@ GitHub Actions 执行检查、测试和打包，上传构建产物供下载，�
 
 ## 来源、适配与许可证
 
-Monika 是独立的业务插件，与插件框架分别构建和发布。它使用的 **VRCX Plugin System Fixed** 是 [vrcx-plugin-system/vrcx-plugin-system](https://github.com/vrcx-plugin-system/vrcx-plugin-system) 的维护 fork，保留 Bluscream 及贡献者的上游来源和 MIT 许可。
+Monika 是独立的业务插件，与插件框架分别构建和发布。它使用的 [VRCX Plugin System Fixed](https://github.com/Tanorika/vrcx-plugin-system-fixed) 是 [vrcx-plugin-system/vrcx-plugin-system](https://github.com/vrcx-plugin-system/vrcx-plugin-system) 的维护 fork，保留 Bluscream 及贡献者的上游来源和 MIT 许可。
 
 
 
