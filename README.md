@@ -4,7 +4,7 @@
 
 Monika 是运行于 [VRCX Plugin System Fixed](https://github.com/Tanorika/vrcx-plugin-system-fixed) 的目标账号活动记录插件。它通过独立的 VRChat API请求观察目标账号及其可见好友，在 VRCX 中查看活动历史、实例人数、模型变化和社交资料。
 
-当前版本：**0.1.22**。
+当前版本：**0.1.23**。
 安装由两个部分组成：VRCX 中的单文件插件 `monika.js`，以及持续运行的 Node.js 本地服务。
 
 ## 安装
@@ -27,7 +27,7 @@ Monika 是运行于 [VRCX Plugin System Fixed](https://github.com/Tanorika/vrcx-
 
 ### 3. 解压 Monika 并启动服务
 
-下载本项目 Releases 中的 `Monika-v0.1.22.zip`，完整解压到一个固定目录，例如 `D:\Apps\Monika`。保持 `server/`、`src/`、`dist/` 和 `package.json` 的相对位置。
+下载本项目 Releases 中的 `Monika-v0.1.23.zip`，完整解压到一个固定目录，例如 `D:\Apps\Monika`。保持 `server/`、`src/`、`dist/` 和 `package.json` 的相对位置。
 
 在解压目录打开 PowerShell：
 
@@ -225,7 +225,7 @@ npm test
 npm run package
 ```
 
-`npm test` 自动先构建，再运行 Node.js 测试。`npm run check` 检查 JavaScript 语法、VRCX 快照哈希及 Fixed 测试 fixture 来源。`npm run package` 自动构建，生成 `releases/Monika-v0.1.22.zip`、解压目录和 `.zip.sha256` 校验文件。
+`npm test` 自动先构建，再运行 Node.js 测试。`npm run check` 检查 JavaScript 语法、VRCX 快照哈希及 Fixed 测试 fixture 来源。`npm run package` 自动构建，生成 `releases/Monika-v0.1.23.zip`、解压目录和 `.zip.sha256` 校验文件。
 
 ```powershell
 npm run preview
