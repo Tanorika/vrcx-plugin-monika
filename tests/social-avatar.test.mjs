@@ -10,6 +10,7 @@ import {MonikaSocialView,socialLogRows,socialModerationRows,socialFriendRows} fr
 import {openVrcxAvatarPage} from '../src/native-avatar.mjs';
 import {createVrcxAccountDatabase,createVrcxCloudContext,createVrcxAvatarRef,vrcxAvatarPlatforms,vrcxComputeTrustLevel,vrcxReplaceBioSymbols} from '../src/vendor-vrcx.mjs';
 import {Recorder} from '../server/recorder.mjs';
+import {localData} from './helpers/local-data.mjs';
 
 Object.assign(globalThis,{vrcxComputeTrustLevel,vrcxReplaceBioSymbols,escapeHtml,dateText,durationText,safeImage,accountPresence,createVrcxAvatarRef,vrcxAvatarPlatforms});
 function service(t,request=async()=>[]){
@@ -22,7 +23,7 @@ function database(t){
   const db=new DatabaseSync(':memory:');t.after(()=>db.close());
   const bridge={execute:async(fn,sql,args)=>{for(const row of db.prepare(sql).all(args || {}))fn(Object.values(row));},
     executeNonQuery:async(sql,args)=>db.prepare(sql).run(args || {}).changes,executeInsert:async(sql,args)=>Number(db.prepare(sql).run(args || {}).lastInsertRowid)};
-  return new MonikaDatabase(bridge,{databaseFactory:createVrcxAccountDatabase,cloudFactory:createVrcxCloudContext,archiveFactory:(id,events)=>new Recorder(id,()=>{},events,{closeUnfinished:false})});
+  return new MonikaDatabase(bridge,{databaseFactory:createVrcxAccountDatabase,data:localData(t).data});
 }
 const snapshot=(updatedAt,friends,extra={})=>({accountId:'usr_alt',updatedAt,friends,friendsComplete:true,favorites:[],groups:[],moderations:[],errors:{},...extra});
 

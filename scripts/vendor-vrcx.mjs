@@ -7,12 +7,10 @@ const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const inputs=new Set();
 const read=async path=>{inputs.add('vendor/vrcx/src/'+path);return (await readFile(resolve(root,'vendor/vrcx/src',path),'utf8')).replaceAll('\r\n','\n');};
 const strip=text=>text.replace(/^import[\s\S]*?;\s*/gm,'').replace(/^export\s*\{[^}]*\};?\s*/gm,'').replace(/^export (?=(?:async )?function)/gm,'');
-const names=['userProfile','feed','friendLogCurrent','friendLogHistory','notifications','moderation','activityV2','gameLog'];
+const names=['userProfile','feed','friendLogCurrent','friendLogHistory','notifications','moderation','activityV2'];
 const parts=await Promise.all(names.map(async name=>strip(await read(`services/database/${name}.js`))));
 const index=await read('services/database/index.js');
 const userInit=index.slice(index.indexOf('    async initUserTables('),index.indexOf('    async initTables()'));
-const gameInit=index.slice(index.indexOf('    async initTables()'),index.indexOf('    begin()'));
-const gameCreates=[...gameInit.matchAll(/`(CREATE (?:TABLE|INDEX) IF NOT EXISTS [\s\S]*?)`/g)].map(m=>m[1]).filter(sql=>/\bgamelog_/.test(sql));
 const events=strip(await read('coordinators/userEventCoordinator.js'));
 const presence=await read('coordinators/friendPresenceCoordinator.js');
 const delayed=strip(presence.slice(0,presence.indexOf('/**\n * Handles immediate friend presence')));
@@ -21,7 +19,6 @@ const accountFactory=`export function createVrcxAccountDatabase(sqliteService, a
   const dbVars={userId:accountId,userPrefix:accountId.replaceAll('-','').replaceAll('_',''),maxTableSize:500,searchTableSize:5000};
   ${parts.join('\n')}
   const database={${userInit} ...${names.join(',...')}};
-  database.initScopedGameTables=async()=>{${gameCreates.map(sql=>`await sqliteService.executeNonQuery(${JSON.stringify(sql)});`).join('\n')}};
   return database;
 }
 `;
@@ -87,7 +84,5 @@ const feedFilterChange=feedView.slice(feedView.indexOf('    function handleFeedF
 const output=`/* Generated from VRCX 2026.09.16 (MIT). Run npm run build to regenerate. */\n${accountFactory}${cloudFactory}${feedHelpers}\n${worldRef}\n${avatarRef}\n${bioSymbols}\n${fileHelpers}\n${avatarHelpers}\n${trustHelper}\n${locationParser}\n${feedFilterChange}\n`;
 new Script(output.replace(/^export /gm,''));
 await writeFile(resolve(root,'src/vendor-vrcx.mjs'),output.replace(/[ \t]+$/gm,''));
-const recorder=await readFile(resolve(root,'server/recorder.mjs'),'utf8');
-await writeFile(resolve(root,'src/archive.mjs'),`/* Shared Monika extension reducer, generated for browser read-only archives. */\nconst randomUUID=()=>globalThis.crypto.randomUUID();\n${recorder.replace(/^import .*;\s*/m,'').replaceAll('Recorder','MonikaArchive')}`);
 console.log('Generated isolated VRCX database and cloud event contexts');
 await writeFile(resolve(root,'dist/vendor-context-inputs.json'),JSON.stringify([...inputs].sort(),null,2));

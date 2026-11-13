@@ -3,6 +3,7 @@ import { Recorder, realLocation } from './recorder.mjs';
 import { VRChatClient, ApiError } from './vrchat.mjs';
 import { connectPipeline } from './pipeline.mjs';
 import { accountKey } from './storage.mjs';
+import { NativeRecords } from './native-records.mjs';
 import { vrcxParseLocation } from '../src/vendor-vrcx.mjs';
 import { resolveAvatarMetadata,avatarDetails,socialSnapshot,socialUserDetails,socialAction,nativeSocialQuery } from './entities.mjs';
 
@@ -52,6 +53,7 @@ export class MonikaService {
     this.pipelineFactory = pipelineFactory;
     this.profiles = storage.read('sessions.json', {});
     this.recorders = new Map();
+    this.nativeRecords = new Map();
     this.active = null; this.pending = null; this.generation = 0; this.authBusy = false;
     this.primaryId = ''; this.proxy = ''; this.interval = 60000; this.locationBufferMs = 0; this.timer = null; this.pollPromise = null;
     this.lastError = ''; this.lastRosterAt = null; this.connected = false; this.retryAt = 0;
@@ -66,10 +68,25 @@ export class MonikaService {
     id = accountKey(id);
     if (!this.recorders.has(id)) {
       const { replay, append } = this.storage.journal(id);
-      this.recorders.set(id, new Recorder(id, append, replay, {locationBufferMs:this.effectiveLocationBuffer()}));
+      const native=new NativeRecords(id,{
+        worldName:location=>this.recorders.get(id)?.worldNames.get(String(location).split(':')[0]) || String(location).split(':')[0],
+        avatarName:image=>{
+          const asset=this.storage.read(`${id}.avatar-metadata.json`,{})[image];
+          return asset?{ownerId:asset.ownerId || '',avatarName:asset.name,fileCreatedAt:asset.fileCreatedAt}:null;
+        }
+      });
+      this.nativeRecords.set(id,native);
+      // Older journals remain readable. New native observations are transient;
+      // only Monika's derived activity events are appended to data/.
+      this.recorders.set(id, new Recorder(id, event=>{
+        if(!['cloud-user','friend-log'].includes(event.type))append(event);
+        native.observe(event);
+      }, replay, {locationBufferMs:this.effectiveLocationBuffer()}));
+      for(const event of replay)native.observe(event);
     }
     return this.recorders.get(id);
   }
+  async readNativeRecords(id,options){this.recorder(id);return this.nativeRecords.get(id).read(options);}
   status() {
     const r = this.active ? this.recorder(this.active.user.id) : null;
     return { user: this.active ? profile(this.active.user) : null, pending2FA: this.pending?.methods || [],

@@ -292,12 +292,12 @@ export class Recorder {
     if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) throw new Error('日期范围无效');
     const needle = String(search).toLowerCase();
     const match = value => !needle || JSON.stringify(value).toLowerCase().includes(needle);
-    const matchingVisits=new Set(needle?this.events.filter(e=>!['heartbeat','roster-observed','cloud-user'].includes(e.type) && e.visitId && match(e)).map(e=>e.visitId):[]);
+    const matchingVisits=new Set(needle?this.events.filter(e=>!['heartbeat','roster-observed','cloud-user','friend-log'].includes(e.type) && e.visitId && match(e)).map(e=>e.visitId):[]);
     const visits = [...this.visits.values()].filter(v => v.start <= to && (v.end ?? v.lastSeen) >= from && (match(v) || matchingVisits.has(v.id))).map(v => ({ ...v,
       final: v.end !== null ? v.final : [...(this.rosters.get(v.id)?.values() || [])], finalAt: v.end !== null ? v.finalAt : v.rosterLastSeen,
       duration: Math.max(0, Math.min(v.end ?? v.lastSeen, to) - Math.max(v.start, from)) })).sort((a,b) => b.start - a.start);
     const visitIds = new Set([...this.visits.values()].filter(v => v.start <= to && (v.end ?? v.lastSeen) >= from).map(v => v.id));
-    const filtered = this.events.filter(e => !['heartbeat','roster-observed','world','cloud-user','instance-count'].includes(e.type) && e.at >= from && e.at <= to &&
+    const filtered = this.events.filter(e => !['heartbeat','roster-observed','world','cloud-user','friend-log','instance-count'].includes(e.type) && e.at >= from && e.at <= to &&
       (!visitId || e.visitId === visitId) && (!type || e.type === type) &&
       (!selfOnly || e.userId === this.accountId || (e.person?.id === this.accountId) || ['visit-start','visit-end','visit-resume','observation-gap','observation-resumed'].includes(e.type)) && match(e)).reverse();
     const worlds = new Map();
@@ -316,7 +316,7 @@ export class Recorder {
     const visit = this.visits.get(id);
     if (!visit) return null;
     return { visit: { ...visit, final: visit.end !== null ? visit.final : [...(this.rosters.get(visit.id)?.values() || [])], finalAt: visit.end !== null ? visit.finalAt : visit.rosterLastSeen },
-      events: this.events.filter(e => e.visitId === id && !['heartbeat','roster-observed','world','cloud-user','instance-count'].includes(e.type)) };
+      events: this.events.filter(e => e.visitId === id && !['heartbeat','roster-observed','world','cloud-user','friend-log','instance-count'].includes(e.type)) };
   }
 
   cloudUsers = new Map();

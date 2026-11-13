@@ -396,7 +396,10 @@ export class MonikaView {
           await this.socialView.load();if(!isCurrent())return;
         }else if(this.tab!=='settings'){
           const id=this.accountId,options=this.options(),native=this.tab==='native';
-          const [history,feed]=await Promise.all([this.controller.history(id,options),native?this.controller.nativeHistory(id,options):null]);
+          const [history,feed]=await Promise.all([this.controller.history(id,options).catch(error=>{
+            if(!native)throw error;
+            return {visits:[],events:[],visitTotal:0,eventTotal:0,stats:{},worlds:[]};
+          }),native?this.controller.nativeHistory(id,options):null]);
           if(!isCurrent() || id!==this.accountId)return;
           this.history=native?{...history,...feed,range:{from:options.from,to:options.to}}:{...history,range:{from:options.from,to:options.to}};
           if(this.tab==='activity')await Promise.all((history.visits || []).filter(visit=>this.expandedVisits.has(this.visitKey(visit.id))).map(visit=>this.loadVisit(visit.id,{force:true,render:false})));

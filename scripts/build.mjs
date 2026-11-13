@@ -9,7 +9,7 @@ await mkdir(resolve(root,'dist'),{recursive:true});
 const nativeUi=await buildNativeUi();
 // Browser sources intentionally have no imports. Node tests import their named exports.
 await import('./vendor-vrcx.mjs');
-const files = ['src/vendor-vrcx.mjs', 'src/archive.mjs', 'src/database.mjs', 'src/native-world.mjs', 'src/native-avatar.mjs', 'src/social.mjs', 'src/view.mjs', 'src/plugin.mjs'];
+const files = ['src/vendor-vrcx.mjs', 'src/remote-data.mjs', 'src/database.mjs', 'src/native-world.mjs', 'src/native-avatar.mjs', 'src/social.mjs', 'src/view.mjs', 'src/plugin.mjs'];
 const parts = await Promise.all(files.map(async file => {
   const text = await readFile(resolve(root, file), 'utf8');
   if (/^import\s/m.test(text)) throw new Error(`Browser source must be self-contained: ${file}`);

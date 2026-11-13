@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import { Recorder } from '../server/recorder.mjs';
 import { DatabaseSync } from 'node:sqlite';
+import { NativeRecords } from '../server/native-records.mjs';
 import { Script } from 'node:vm';
 import { createHttpServer } from '../server/http.mjs';
 import { buildPreviewStyles } from './build-preview-styles.mjs';
@@ -60,7 +61,12 @@ const demoSocial={accountId:'usr_demo',friends:demoFriends,
   favorites:demoFriends.slice(0,5).map((friend,index)=>({id:'fvrt_demo_'+index,type:'friend',favoriteId:friend.id,tags:[index<3?'group_0':'group_1']})),
   moderations:[{id:'pmod_demo',created:date+'T10:00:00Z',type:'mute',sourceUserId:'usr_demo',sourceDisplayName:'Monika',targetUserId:'usr_haru',targetDisplayName:'Haru'}],
   history:demoFriends.map((friend,index)=>({rowId:index+1,created_at:date+'T10:'+String(index*5).padStart(2,'0')+':00Z',type:index%3===0?'DisplayName':'Friend',userId:friend.id,displayName:friend.displayName,previousDisplayName:index%3===0?friend.displayName+' old':''}))};
-const service={profiles:{usr_demo:profile},retryAt:0,interval:60000,
+const native=new NativeRecords('usr_demo',{worldName:location=>r.worldNames.get(location.split(':')[0]) || location.split(':')[0]});
+for(const event of r.events)native.observe(event);
+const previewData=new Map();
+const service={profiles:{usr_demo:profile},primaryId:'usr_main',retryAt:0,interval:60000,
+  storage:{read:(name,fallback)=>previewData.get(name) ?? fallback,write:(name,value)=>previewData.set(name,value)},
+  nativeRecords:new Map([['usr_demo',native]]),readNativeRecords:async(id,options)=>native.read(options),
   recorder:()=>r,settings(){},status:()=>({user:recording?user:null,pending2FA:[],connected:recording,recording,lastSeen:r.lastSeen,lastRosterAt:r.lastSeen,lastError:'',retryAt:0,location:user.location,locationBufferMs:120000,locations:[...r.activeVisits.values()].map(v=>({location:v.location,worldName:v.worldName,lastSeen:v.locationSeen,visitId:v.id,population:v.population.at(-1) || null})),accounts:[user],scope:'visible-friends'}),
   credentials:()=>profile,poll:async()=>{},stop(){recording=false;},login:async()=>{recording=true;return profile;},verify:async()=>profile,
   socialSnapshot:async()=>demoSocial,

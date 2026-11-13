@@ -2,6 +2,7 @@ import { version } from './version.mjs';
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { readAccountData,writeAccountData,peopleStats } from './account-data.mjs';
 
 function body(request) {
   return new Promise((resolve, reject) => {
@@ -54,6 +55,12 @@ export function createHttpServer(service, { projectRoot, port = 39123 }) {
         if (url.pathname === '/avatars/resolve') { json(200,await service.resolveAvatarMetadata(data));return; }
         if (url.pathname === '/social/action') { json(200,await service.socialAction(data));return; }
         if (url.pathname === '/social/native') { json(200,await service.nativeSocialQuery(data));return; }
+        if (url.pathname === '/data') { json(200,writeAccountData(service,data));return; }
+        if (url.pathname === '/native-ack') {
+          const id=data.accountId;
+          if(!service.profiles[id] || id===service.primaryId){json(404,{error:'目标账号不存在'});return;}
+          service.recorder(id);json(200,service.nativeRecords.get(id).acknowledge(data));return;
+        }
       }
       if(req.method==='GET' && url.pathname==='/social') {json(200,await service.socialSnapshot(url.searchParams.get('accountId'),{force:url.searchParams.get('force')==='true'}));return;}
       if(req.method==='GET' && url.pathname.startsWith('/social/users/')) {json(200,await service.socialUserDetails(url.searchParams.get('accountId'),decodeURIComponent(url.pathname.slice(14)),{mutuals:url.searchParams.get('mutuals')==='true'}));return;}
@@ -62,17 +69,22 @@ export function createHttpServer(service, { projectRoot, port = 39123 }) {
         json(200,await service.worldDetails(url.searchParams.get('accountId'),decodeURIComponent(url.pathname.slice(8)),url.searchParams.get('location') || ''));return;
       }
       if (req.method === 'GET' && url.pathname === '/credentials') { json(200, service.credentials()); return; }
-      if (req.method === 'GET' && url.pathname === '/sync') {
+      if(req.method==='GET' && url.pathname==='/data'){
+        json(200,{value:readAccountData(service,url.searchParams.get('accountId'),url.searchParams.get('kind'))});return;
+      }
+      if(req.method==='GET' && ['/native-sync','/archive-context','/people-stats'].includes(url.pathname)){
         const id=url.searchParams.get('accountId');
-        if(!service.profiles[id]){json(404,{error:'目标账号不存在'});return;}
-        const events=service.recorder(id).events,after=Number(url.searchParams.get('after') || 0);
-        if(!Number.isInteger(after) || after<0 || after>events.length){json(409,{error:'同步游标与记录不匹配，请检查本地记录是否被截断'});return;}
-        const batch=events.slice(after,after+500).map((event,i)=>({seq:after+i+1,event}));
-        json(200,{accountId:id,events:batch,total:events.length,hasMore:after+batch.length<events.length});return;
+        if(!service.profiles[id] || id===service.primaryId){json(404,{error:'目标账号不存在'});return;}
+        const recorder=service.recorder(id);
+        if(url.pathname==='/native-sync'){
+          json(200,await service.readNativeRecords(id,{after:Number(url.searchParams.get('after') || 0),streamId:url.searchParams.get('streamId') || ''}));return;
+        }
+        if(url.pathname==='/people-stats'){json(200,peopleStats(recorder));return;}
+        json(200,{accountId:id,worldNames:[...recorder.worldNames],visits:[...recorder.visits.values()]});return;
       }
       if (req.method === 'GET' && ['/history','/export'].includes(url.pathname)) {
         const id = url.searchParams.get('accountId');
-        if (!service.profiles[id]) { json(404, { error: '未找到该目标账号的记录' }); return; }
+        if (!service.profiles[id] || id===service.primaryId) { json(404, { error: '未找到该目标账号的记录' }); return; }
         const recorder = service.recorder(id), options = historyOptions(url.searchParams);
         const query = recorder.query(options);
         if (url.pathname === '/history') { json(200, query); return; }
@@ -86,7 +98,7 @@ export function createHttpServer(service, { projectRoot, port = 39123 }) {
       }
       if (req.method === 'GET' && url.pathname.startsWith('/visits/')) {
         const id = url.searchParams.get('accountId');
-        if (!service.profiles[id]) { json(404, { error: '未找到该目标账号的记录' }); return; }
+        if (!service.profiles[id] || id===service.primaryId) { json(404, { error: '未找到该目标账号的记录' }); return; }
         const detail = service.recorder(id).detail(decodeURIComponent(url.pathname.slice(8)));
         json(detail ? 200 : 404, detail || { error: '活动不存在' }); return;
       }

@@ -1,32 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { MonikaDatabase,scopeSql,adaptSQLite } from '../src/database.mjs';
+import { MonikaDatabase,adaptSQLite } from '../src/database.mjs';
 import { createVrcxAccountDatabase,createVrcxCloudContext } from '../src/vendor-vrcx.mjs';
 import { Recorder } from '../server/recorder.mjs';
+import {localData} from './helpers/local-data.mjs';
 
 function sqlite(t) {
   const native=new DatabaseSync(':memory:');t.after(()=>native.close());const statements=[];
-  return {native,statements,execute:async(callback,sql,args)=>{statements.push(sql);for(const row of native.prepare(sql).all(args || {}))callback(Object.values(row));},
+  return {native,statements,local:localData(t),execute:async(callback,sql,args)=>{statements.push(sql);for(const row of native.prepare(sql).all(args || {}))callback(Object.values(row));},
     executeNonQuery:async(sql,args)=>{statements.push(sql);return native.prepare(sql).run(args || {}).changes;},
     executeInsert:async(sql,args)=>{statements.push(sql);const result=native.prepare(sql).run(args || {});return result.changes?Number(result.lastInsertRowid):0;}};
 }
-function sink(sql) {return new MonikaDatabase(sql,{databaseFactory:createVrcxAccountDatabase,cloudFactory:createVrcxCloudContext,
-  archiveFactory:(id,events)=>new Recorder(id,()=>{},events,{closeUnfinished:false})});}
-function records() {
-  const recorder=new Recorder('usr_alt');
-  const user=(location='wrld_a:1',avatar='avtr_1',status='active')=>({id:'usr_alt',displayName:'Alt',location,currentAvatar:avatar,status});
-  recorder.observeSelf(user(),1000);recorder.observeRoster([{id:'usr_friend',displayName:'Friend',location:'wrld_a:1',currentAvatar:'avtr_f1',status:'active'}],user(),1200);
-  recorder.observeSelf(user('wrld_b:2','avtr_2','busy'),3000);
-  recorder.observeRoster([],user('wrld_b:2','avtr_2','busy'),3100);recorder.observeSelf(user('wrld_b:2','avtr_2','busy'),5000);recorder.close(5000);
-  return recorder.events.map((event,i)=>({seq:i+1,event}));
+function sink(sql) {return new MonikaDatabase(sql,{databaseFactory:createVrcxAccountDatabase,data:sql.local.data});}
+async function records(sql) {
+  const recorder=sql.local.service.recorder('usr_alt');
+  const user=(location='wrld_a:1',status='active')=>({id:'usr_alt',displayName:'Alt',location,status});
+  recorder.observeSelf(user(),1000);recorder.observeRoster([{id:'usr_friend',displayName:'Friend',location:'wrld_a:1',status:'active'}],user(),1200);
+  recorder.observeSelf(user('wrld_b:2','busy'),3000);recorder.observeRoster([],user('wrld_b:2','busy'),3100);
+  recorder.observeSelf(user('wrld_b:2','busy'),5000);recorder.close(5000);
+  return (await sql.local.service.readNativeRecords('usr_alt')).records;
 }
 
 test('original VRCX feed filters return empty Bio rows and enrich old friend GPS names from persisted metadata',async t=>{
   const sql=sqlite(t),database=sink(sql),context=await database.account('usr_alt');
   await context.database.addStatusToDatabase({created_at:new Date(1000).toISOString(),userId:'usr_friend',displayName:'Friend',status:'ask me'});
   await context.database.addGPSToDatabase({created_at:new Date(1000).toISOString(),userId:'usr_friend',displayName:'Friend',location:'wrld_friend:1',worldName:'wrld_friend'});
-  context.archive.reduce({type:'world',worldId:'wrld_friend',name:'Resolved World',accountId:'usr_alt',at:2000});
+  sql.local.service.recorder('usr_alt').emit('world',{worldId:'wrld_friend',name:'Resolved World'},2000);
   const options={from:0,to:5000};
   assert.equal((await database.nativeFeed('usr_alt',{...options,nativeType:'Status'})).events[0].type,'Status');
   assert.equal((await database.nativeFeed('usr_alt',{...options,nativeType:'Bio'})).events.length,0);
@@ -85,144 +85,62 @@ test('fire-and-forget write errors still fail flush and ingest, then retry in a 
   await assert.rejects(context.scoped.flush(),e=>e==='CEF SQLite write failure');
   await assert.rejects(context.scoped.execute(()=>{},'SELECT 1'),e=>e==='CEF SQLite write failure');
   await assert.rejects(context.scoped.flush(),e=>e==='CEF SQLite write failure');
-  const batch=records();await assert.rejects(database.ingest('usr_alt',batch),e=>e==='CEF SQLite write failure');
-  assert.equal(database.contexts.has('usr_alt'),false);assert.equal(await database.cursor('usr_alt'),0);
-  await database.ingest('usr_alt',batch);assert.equal(await database.cursor('usr_alt'),batch.length);
+  const batch=await records(sql);await assert.rejects(database.ingestNative('usr_alt',batch),e=>e==='CEF SQLite write failure');
+  assert.equal(database.contexts.has('usr_alt'),false);
+  await database.ingestNative('usr_alt',batch);assert((await database.nativeFeed('usr_alt',{from:0,to:10000})).events.length>0);
 });
 
-test('API population samples survive SQLite sync retries and offline archive reconstruction without native feed noise',async t=>{
-  const sql=sqlite(t),database=sink(sql),r=new Recorder('usr_alt');
-  const user={id:'usr_alt',displayName:'Alt',location:'wrld_a:1'};
-  r.observeSelf(user,1000);r.observeRoster([],user,1100);
-  r.observeInstanceCount(user.location,{total:15,capacity:16,intervalMs:60000},1200);
-  r.observeInstanceCount(user.location,{total:null,reason:'inaccessible',httpStatus:403},1300);
-  r.observeSelf(user,1500);r.close(1500);
-  const batch=r.events.map((event,i)=>({seq:i+1,event}));
-  let fail=true;const run=sql.executeNonQuery;
-  sql.executeNonQuery=async(statement,args)=>{if(fail && statement.startsWith('INSERT OR REPLACE INTO monika_sync') && args['@seq']===batch.find(v=>v.event.type==='instance-count').seq){fail=false;throw new Error('population retry');}return run(statement,args);};
-  await assert.rejects(database.ingest('usr_alt',batch,user),/population retry/);
-  await database.ingest('usr_alt',batch.slice(await database.cursor('usr_alt')),user);
-  const restored=sink(sql),detail=await restored.detail('usr_alt',[...r.visits.keys()][0]);
-  assert.deepEqual(detail.visit.population.map(s=>[s.total,s.capacity,s.reason]),[[15,16,''],[null,null,'inaccessible']]);
-  assert.equal(detail.visit.end,1500);assert(!detail.events.some(e=>e.type==='instance-count'));
-  assert.equal(sql.native.prepare("SELECT COUNT(*) n FROM monika_events WHERE type='instance-count'").get().n,2);
-  const feed=await restored.nativeFeed('usr_alt',{from:0,to:10000});assert(!feed.events.some(e=>e.type==='instance-count'));
-  const history=await restored.history('usr_alt',{from:0,to:10000});assert(!history.events.some(e=>e.type==='instance-count'));
-});
-
-test('buffered visits project one native GPS entry per segment and isolated overlapping game histories, including retries',async t=>{
-  const sql=sqlite(t),database=sink(sql),r=new Recorder('usr_alt',()=>{},[],{locationBufferMs:10000});
-  const user=location=>({id:'usr_alt',displayName:'Alt',location});
-  r.observeSelf(user('wrld_a:1'),1000);r.emit('world',{worldId:'wrld_a',name:'Let me decay'},1100);
-  r.observeSelf(user('wrld_b:2'),2000);r.emit('world',{worldId:'wrld_b',name:'Steal an egg!'},2100);
-  r.observeRoster([{id:'usr_friend_a',displayName:'Friend A',location:'wrld_a:1'},{id:'usr_friend_b',displayName:'Friend B',location:'wrld_b:2'}],user('wrld_b:2'),2200);
-  r.observeSelf(user('wrld_a:1'),3000);r.observeSelf(user('traveling'),3500);r.observeSelf(user('wrld_b:2'),4000);
-  r.observeSelf(user('wrld_a:1'),5000);r.observeSelf(user('wrld_b:2'),6000);r.close(20000,'manual-stop','last-observed');
-  const batch=r.events.map((event,i)=>({seq:i+1,event}));
-  const startSeq=batch.find(item=>item.event.type==='visit-start').seq;
-  let fail=true;const run=sql.executeNonQuery;
-  sql.executeNonQuery=async(statement,args)=>{if(fail && statement.startsWith('INSERT OR REPLACE INTO monika_sync') && args['@seq']===startSeq){fail=false;throw new Error('retry buffered GPS');}return run(statement,args);};
-  await assert.rejects(database.ingest('usr_alt',batch,user('wrld_b:2')),/retry/);
-  await database.ingest('usr_alt',batch.slice(await database.cursor('usr_alt')),user('wrld_b:2'));
-  const gps=sql.native.prepare('SELECT location,world_name FROM usralt_feed_gps WHERE user_id=\'usr_alt\' ORDER BY created_at').all();
-  assert.deepEqual(gps.map(row=>({...row})),[{location:'wrld_a:1',world_name:'Let me decay'},{location:'wrld_b:2',world_name:'Steal an egg!'}]);
-  const logs=sql.native.prepare('SELECT location,time FROM usralt_monika_gamelog_location ORDER BY created_at').all();
-  assert.deepEqual(logs.map(row=>({...row})),[{location:'wrld_a:1',time:4000},{location:'wrld_b:2',time:4000}]);
-  const restored=sink(sql),history=await restored.history('usr_alt',{from:0,to:10000});
-  assert.equal(history.visitTotal,2);assert.equal(history.stats.elapsedDuration,5000);assert.equal(history.stats.parallelDuration,3000);
-  for(const visit of history.visits)assert.deepEqual(visit.final.map(p=>p.id),visit.location==='wrld_a:1'?['usr_alt','usr_friend_a']:['usr_alt','usr_friend_b']);
-});
-
-test('resuming across a service restart retains one activity and GPS, retracts only its temporary end, and retries safely',async t=>{
-  const sql=sqlite(t),database=sink(sql),r=new Recorder('usr_alt',()=>{},[],{locationBufferMs:3000});
-  const user={id:'usr_alt',displayName:'Alt',location:'wrld_a:1'},friend={id:'usr_friend',displayName:'Friend',location:user.location};
-  r.observeSelf(user,1000);r.observeRoster([friend],user,1500);r.observeInstanceCount(user.location,{total:12},2000);r.observeSelf(user,3000);
-  const id=r.current.id;r.close(4000,'manual-stop','last-observed');
-  const initial=r.events.map((event,i)=>({seq:i+1,event}));await database.ingest('usr_alt',initial,user);
-  assert.equal(sql.native.prepare('SELECT COUNT(*) n FROM usralt_monika_gamelog_location').get().n,1);
-  assert.equal(sql.native.prepare("SELECT COUNT(*) n FROM usralt_monika_gamelog_join_leave WHERE type='OnPlayerLeft'").get().n,2);
-  // Keep an unrelated secondary row at the same timestamp and location intact.
-  sql.native.prepare('INSERT INTO usralt_monika_gamelog_join_leave(created_at,type,user_id,display_name,location,time) VALUES(?,?,?,?,?,?)')
-    .run(new Date(3000).toISOString(),'OnPlayerLeft','usr_unrelated','Unrelated',user.location,99);
-  const resumed=new Recorder('usr_alt',()=>{},r.events,{locationBufferMs:3000});resumed.observeSelf(user,100000);resumed.observeRoster([friend],user,101000);
-  const resumeSeq=resumed.events.findIndex(e=>e.type==='visit-resume')+1;let fail=true;const write=sql.executeNonQuery;
-  sql.executeNonQuery=async(statement,args)=>{if(fail && statement.startsWith('INSERT OR REPLACE INTO monika_sync') && args['@seq']===resumeSeq){fail=false;throw new Error('resume retry');}return write(statement,args);};
-  const batch=resumed.events.map((event,i)=>({seq:i+1,event}));
-  await assert.rejects(database.ingest('usr_alt',batch.slice(initial.length),user),/resume retry/);
-  await database.ingest('usr_alt',batch.slice(await database.cursor('usr_alt')),user);
-  assert.equal(sql.native.prepare('SELECT COUNT(*) n FROM usralt_monika_gamelog_location').get().n,0);
-  assert.deepEqual(sql.native.prepare("SELECT user_id FROM usralt_monika_gamelog_join_leave WHERE type='OnPlayerLeft'").all().map(row=>row.user_id),['usr_unrelated']);
-  assert.equal(sql.native.prepare('SELECT COUNT(*) n FROM usralt_feed_gps').get().n,1);
-  let restored=sink(sql),detail=await restored.detail('usr_alt',id);
-  assert.equal(detail.visit.start,1000);assert.equal(detail.visit.end,null);assert.equal(detail.visit.population[0].total,12);
-  assert.equal((await restored.history('usr_alt',{from:0,to:200000})).visitTotal,1);
-  const after=resumed.events.length;resumed.close(110000,'manual-stop','last-observed');
-  await database.ingest('usr_alt',resumed.events.slice(after).map((event,i)=>({seq:after+i+1,event})),user);
-  assert.equal(sql.native.prepare('SELECT COUNT(*) n FROM usralt_monika_gamelog_location').get().n,1);
-  assert.equal(sql.native.prepare('SELECT time FROM usralt_monika_gamelog_location').get().time,100000);
-  restored=sink(sql);assert.equal((await restored.detail('usr_alt',id)).visit.end,101000);
-});
-
-test('loading transitions do not pollute native GPS and repeated visits keep persisted world names',async t=>{
-  const sql=sqlite(t),database=sink(sql),r=new Recorder('usr_alt');
-  const user=location=>({id:'usr_alt',displayName:'Alt',location});
-  r.observeSelf(user('wrld_a:1'),1000);r.emit('world',{worldId:'wrld_a',name:'Let me decay'},1100);
-  r.observeSelf(user('traveling:traveling'),2000);r.observeSelf(user('wrld_a:1'),3000);
-  r.observeSelf(user('traveling'),4000);r.observeSelf(user('wrld_b:2'),5000);
-  r.observeSelf(user('wrld_a:1'),6000);r.close(7000);
-  await database.ingest('usr_alt',r.events.map((event,i)=>({seq:i+1,event})),user('wrld_a:1'));
-  const gps=sql.native.prepare('SELECT location,world_name FROM usralt_feed_gps ORDER BY created_at').all();
-  assert.deepEqual(gps.map(row=>row.location),['wrld_b:2','wrld_a:1']);assert.equal(gps[1].world_name,'Let me decay');
+test('native records use VRCX account tables while activities and population stay in data/',async t=>{
+  const sql=sqlite(t),database=sink(sql),batch=await records(sql);
+  sql.native.exec("CREATE TABLE gamelog_location(id INTEGER PRIMARY KEY,location TEXT); INSERT INTO gamelog_location(location) VALUES('wrld_main:1');");
+  await database.ingestNative('usr_alt',batch);
+  const r=sql.local.service.recorder('usr_alt');
+  // Record a third activity with API population, then reconstruct it through the service.
+  r.observeSelf({id:'usr_alt',location:'wrld_c:3'},6000);
+  r.observeInstanceCount('wrld_c:3',{total:15,capacity:16},6200);r.close(6500);
   const history=await database.history('usr_alt',{from:0,to:10000});assert.equal(history.visitTotal,3);
-  assert(history.visits.filter(v=>v.location==='wrld_a:1').every(v=>v.worldName==='Let me decay'));
-  const restored=sink(sql);assert((await restored.history('usr_alt',{from:0,to:10000})).visits.filter(v=>v.location==='wrld_a:1').every(v=>v.worldName==='Let me decay'));
-});
-
-test('reused VRCX methods write native account feeds and isolated game tables in the shared SQLite',async t=>{
-  const sql=sqlite(t);sql.native.exec('CREATE TABLE gamelog_location(id INTEGER PRIMARY KEY,created_at TEXT,location TEXT,world_id TEXT,world_name TEXT,time INTEGER,group_name TEXT); INSERT INTO gamelog_location(location,world_id,time) VALUES(\'wrld_main:1\',\'wrld_main\',999999);');
-  const database=sink(sql),batch=records();await database.ingest('usr_alt',batch,{id:'usr_alt',displayName:'Alt'});
-  assert.equal(sql.native.prepare('SELECT COUNT(*) n FROM gamelog_location').get().n,1);
-  assert.equal(sql.native.prepare('SELECT COUNT(*) n FROM usralt_monika_gamelog_location').get().n,2);
+  const detail=await database.detail('usr_alt',history.visits[0].id);assert.equal(detail.visit.population[0].total,15);
+  const names=sql.native.prepare("SELECT name FROM sqlite_schema WHERE type='table'").all().map(row=>row.name);
+  assert(!names.some(name=>name.includes('monika')));
+  assert.equal(sql.native.prepare('SELECT location FROM gamelog_location').get().location,'wrld_main:1');
   assert.equal(sql.native.prepare('SELECT COUNT(*) n FROM usralt_feed_gps').get().n,1);
-  assert.equal(sql.native.prepare('SELECT COUNT(*) n FROM usralt_feed_avatar').get().n,1);
   assert.equal(sql.native.prepare('SELECT COUNT(*) n FROM usralt_feed_status').get().n,3);
   assert.equal(sql.native.prepare('SELECT COUNT(*) n FROM usralt_feed_online_offline').get().n,2);
-  assert.equal(sql.native.prepare('SELECT location FROM usralt_feed_online_offline WHERE user_id=\'usr_alt\'').get().location,'wrld_a:1');
   assert(sql.statements.every(s=>!/^\s*(BEGIN|COMMIT|ROLLBACK)/.test(s)));
-  const history=await database.history('usr_alt',{from:0,to:10000});assert.equal(history.visitTotal,2);assert.equal(history.stats.duration,4000);
-  const native=await database.nativeFeed('usr_alt',{from:0,to:10000,page:1,selfOnly:true});assert(native.events.every(e=>e.userId==='usr_alt'));assert(native.events.some(e=>e.type==='GPS'));
-  const context=await database.account('usr_alt');const locations=await context.database.getCurrentUserLocationSliceV2(new Date(0).toISOString(),new Date(10000).toISOString());assert.equal(locations.length,2);assert(!locations.some(r=>r.time===999999));
-  assert.equal((await database.accounts())[0].id,'usr_alt');
+  const journal=sql.local.storage.journal('usr_alt').replay;
+  assert(journal.some(event=>event.type==='instance-count'));assert(!journal.some(event=>['cloud-user','friend-log'].includes(event.type)));
+  assert((await sink(sql).history('usr_alt',{from:0,to:10000})).visitTotal===3);
 });
 
-test('interrupted native projection retries without duplicate feed rows or lost extension events',async t=>{
-  const sql=sqlite(t),database=sink(sql),batch=records();let rejectOnce=true;
-  const run=sql.executeNonQuery;sql.executeNonQuery=async(sqlText,args)=>{if(rejectOnce&&sqlText.startsWith('INSERT OR REPLACE INTO monika_sync')&&args['@seq']===1){rejectOnce=false;throw new Error('simulated disk failure');}return run(sqlText,args);};
-  await assert.rejects(database.ingest('usr_alt',batch,{id:'usr_alt'}),/simulated/);
-  assert.equal(await database.cursor('usr_alt'),0);await database.ingest('usr_alt',batch,{id:'usr_alt'});
-  assert.equal(sql.native.prepare('SELECT COUNT(*) n FROM usralt_feed_online_offline WHERE user_id=\'usr_alt\'').get().n,1);
-  assert.equal(sql.native.prepare('SELECT COUNT(*) n FROM monika_events').get().n,batch.length);
-  assert.equal(await database.cursor('usr_alt'),batch.length);
-  const restored=sink(sql);assert.equal((await restored.history('usr_alt',{from:0,to:10000})).visitTotal,2);
+test('a partial native batch retries without duplicate feed or friend-log rows',async t=>{
+  const sql=sqlite(t),database=sink(sql),batch=await records(sql);let fail=true;const insert=sql.executeInsert;
+  sql.executeInsert=async(statement,args)=>{
+    if(fail && statement.includes('usralt_feed_gps')){fail=false;throw new Error('simulated disk failure');}
+    return insert(statement,args);
+  };
+  await assert.rejects(database.ingestNative('usr_alt',batch),/simulated/);
+  await database.ingestNative('usr_alt',batch);await database.ingestNative('usr_alt',batch);
+  assert.equal(sql.native.prepare('SELECT COUNT(*) n FROM usralt_feed_status').get().n,3);
+  assert.equal(sql.native.prepare('SELECT COUNT(*) n FROM usralt_feed_gps').get().n,1);
+  const friend={kind:'friend-log',entry:{created_at:new Date(7000).toISOString(),type:'Friend',userId:'usr_friend',displayName:'Friend'}};
+  await database.ingestNative('usr_alt',[friend]);await database.ingestNative('usr_alt',[friend]);
+  assert.equal((await database.socialHistory('usr_alt')).length,1);
 });
 
-test('account contexts preserve main tables and reject event identity mismatches',async t=>{
-  const sql=sqlite(t),database=sink(sql),batch=records();
-  await assert.rejects(database.ingest('usr_alt',[{seq:1,event:{...batch[0].event,accountId:'usr_main'}}]),/不匹配/);
-  assert.throws(()=>scopeSql('SELECT * FROM gamelog_location','../main'),/无效/);
-  const first=await database.account('usr_alt'),other=await database.account('usr_other');
-  await first.database.addGPSToDatabase({created_at:'2026-11-10T00:00:00.000Z',userId:'usr_alt',location:'wrld_alt:1'});
-  await other.database.addGPSToDatabase({created_at:'2026-11-10T00:00:00.000Z',userId:'usr_other',location:'wrld_other:1'});
+test('native account contexts remain isolated and reject derived record types or invalid users',async t=>{
+  const sql=sqlite(t),database=sink(sql);
+  await assert.rejects(database.ingestNative('usr_alt',[{kind:'visit-start',entry:{userId:'usr_alt'}}]),/无效/);
+  await assert.rejects(database.ingestNative('usr_alt',[{kind:'profile',entry:{id:'../main'}}]),/无效/);
+  await database.ingestNative('usr_alt',[{kind:'GPS',entry:{created_at:new Date(1000).toISOString(),userId:'usr_alt',location:'wrld_alt:1'}}]);
+  await database.ingestNative('usr_other',[{kind:'GPS',entry:{created_at:new Date(1000).toISOString(),userId:'usr_other',location:'wrld_other:1'}}]);
   assert.equal(sql.native.prepare('SELECT location FROM usralt_feed_gps').get().location,'wrld_alt:1');
   assert.equal(sql.native.prepare('SELECT location FROM usrother_feed_gps').get().location,'wrld_other:1');
 });
 
-test('missing executeInsert still projects complete account histories through atomic RETURNING',async t=>{
+test('missing executeInsert still writes native feeds through atomic RETURNING',async t=>{
   const sql=sqlite(t);delete sql.executeInsert;
-  const database=sink(sql),batch=records();await database.ingest('usr_alt',batch,{id:'usr_alt'});
-  assert.equal(await database.cursor('usr_alt'),batch.length);
-  assert.equal(sql.native.prepare('SELECT COUNT(*) n FROM usralt_feed_avatar').get().n,1);
-  assert.equal(sql.native.prepare('SELECT COUNT(*) n FROM usralt_monika_gamelog_location').get().n,2);
+  const database=sink(sql);await database.ingestNative('usr_alt',await records(sql));
+  assert.equal(sql.native.prepare('SELECT COUNT(*) n FROM usralt_feed_gps').get().n,1);
   assert.equal((await database.history('usr_alt',{from:0,to:10000})).visitTotal,2);
   assert(sql.statements.some(statement=>statement.includes('RETURNING rowid')));
   assert(!sql.statements.some(statement=>statement.includes('last_insert_rowid')));

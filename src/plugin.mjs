@@ -17,6 +17,7 @@ export class MonikaPlugin extends CustomModule {
     this.databaseSync = null;this.lastState = null;this.statusVersion=0;this.statusPublishedVersion=0;
     this.primarySession = '';this.sessionGeneration = 0;this.settingsPromise = null;
     this.serviceConnected = false;
+    this.nativeProgress=new Map();
     this.worldNameAttempts=new Map();this.worldNamePromise=null;this.worldDialogGeneration=0;this.nativeWorldCleanup=null;
     this.avatarNameAttempts=new Map();this.avatarNamePromise=null;this.avatarDialogGeneration=0;this.nativeAvatarCleanup=null;
   }
@@ -76,7 +77,7 @@ export class MonikaPlugin extends CustomModule {
     this.requireSession(session);
     if(generation!==this.worldDialogGeneration)return;
     if(data.accountId!==accountId || data.world?.id!==worldId)throw new Error('世界详情账号或身份不匹配');
-    const archive=(await this.database.account(accountId)).archive;
+    const archive=await this.database.refreshArchive(accountId);
     const visits=[...archive.visits.values()].filter(v=>v.location.split(':')[0]===worldId);
     const stats={visitCount:visits.length,lastVisit:visits.length?new Date(Math.max(...visits.map(v=>v.start))).toISOString():'',
       timeSpent:visits.reduce((sum,v)=>sum+Math.max(0,(v.end ?? v.lastSeen)-v.start),0)};
@@ -119,7 +120,7 @@ export class MonikaPlugin extends CustomModule {
       throw new Error('请先安装 vrcx-plugin-system-fixed 框架，再从插件管理导入 monika.js');
     if(!window.sqliteService && !window.SQLite)throw new Error('需要 VRCX 原生 SQLite 接口');
     this.set('connection',this.config());
-    this.database = new MonikaDatabase(window.sqliteService || window.SQLite);
+    this.database = new MonikaDatabase(window.sqliteService || window.SQLite,{data:new MonikaRemoteData((...args)=>this.api(...args))});
     await this.database.init();
     this.view = new MonikaView(this);
     navigation.addItem('monika',{label:'Monika',icon:'ri-user-follow-line',content:this.view.root,
@@ -158,14 +159,22 @@ export class MonikaPlugin extends CustomModule {
   async syncDatabase(state=this.lastState) {
     if(this.databaseSync)return this.databaseSync;
     if(!state || !this.database)return;
+    const session=this.session();if(!session.id)return;
     this.databaseSync=(async()=>{
       for(const user of state.accounts || []){
-        if(user.id===this.primaryId())continue;
-        let after=await this.database.cursor(user.id);
+        this.requireSession(session);if(user.id===session.id)continue;
+        let progress=this.nativeProgress.get(user.id) || {after:0,streamId:''};
         for(let round=0;round<10;round++){
-          const batch=await this.api('/sync',undefined,{accountId:user.id,after});
-          await this.database.ingest(user.id,batch.events,user);
-          after=await this.database.cursor(user.id);
+          const batch=await this.api('/native-sync',undefined,{accountId:user.id,...progress});
+          this.requireSession(session);
+          if(batch.accountId!==user.id || typeof batch.streamId!=='string' || !Array.isArray(batch.records) ||
+            !Number.isInteger(batch.after) || batch.after<0 || !Number.isInteger(batch.total) ||
+            batch.after+batch.records.length>batch.total || batch.records.some((record,index)=>record.seq!==batch.after+index+1))throw new Error('原生记录响应账号或格式不匹配');
+          await this.database.ingestNative(user.id,batch.records);
+          this.requireSession(session);
+          progress={streamId:batch.streamId,after:batch.after+batch.records.length};
+          if(batch.records.length)await this.api('/native-ack',{accountId:user.id,...progress});
+          this.nativeProgress.set(user.id,progress);
           if(!batch.hasMore)break;
         }
       }
@@ -188,6 +197,7 @@ export class MonikaPlugin extends CustomModule {
       const result=await this.api('/worlds/resolve',{accountId,worldIds:ids});this.requireSession(session);
       if(result.accountId!==accountId || !Object.keys(result.names || {}).length)return;
       await this.syncDatabase(await this.api('/status'));
+      await this.database.refreshArchive(accountId);
       if(this.visible && this.view?.tab==='native' && this.view.accountId===accountId)await this.view.refresh({localOnly:true});
     })().catch(()=>{}).finally(()=>{
       this.worldNamePromise=null;
@@ -239,15 +249,15 @@ export class MonikaPlugin extends CustomModule {
     if(result.accountId!==accountId)throw new Error('社交请求账号不匹配');return result.data;
   }
   async nativeActivity(accountId,userId){
-    const session=this.requireSession(),context=await this.database.account(accountId),now=Date.now();
+    const session=this.requireSession(),archive=await this.database.refreshArchive(accountId),now=Date.now();
     const data=await this.database.nativeFeed(accountId,{from:0,to:now,nativeTypes:['Online','Offline'],search:'',page:1},{all:true});this.requireSession(session);
     const events=data.events.filter(e=>e.userId===userId).sort((a,b)=>a.at-b.at);
     const friendSessions=[];let start=null;for(const e of events){if(e.type==='Online'){if(start===null)start=e.at;}else if(e.type==='Offline' && start!==null){friendSessions.push({start,end:e.at});start=null;}}if(start!==null)friendSessions.push({start,end:now});
-    const worldVisits=[...context.archive.visits.values()];return {friendSessions,selfSessions:worldVisits.map(v=>({start:v.start,end:v.end ?? v.lastSeen})),worldVisits};
+    const worldVisits=[...archive.visits.values()];return {friendSessions,selfSessions:worldVisits.map(v=>({start:v.start,end:v.end ?? v.lastSeen})),worldVisits};
   }
   async confirm(options){const modal=window.$pinia?.modal;if(!modal?.confirm)throw new Error('当前 VRCX 未提供确认窗口');return (await modal.confirm(options)).ok;}
   async prompt(options){const modal=window.$pinia?.modal;if(!modal?.prompt)throw new Error('当前 VRCX 未提供输入窗口');const result=await modal.prompt(options);return result.ok?result.value:null;}
-  storedAccounts(){return this.database.accounts();}
+  async storedAccounts(){return Object.values(await this.savedAccounts()).map(saved=>saved.user).filter(user=>user?.id && user.id!==this.primaryId());}
   async saveConfig(config) {
     if (!this.set('connection',{...this.config(),...config})) throw new Error('无法保存 Monika 设置');
     await this.updateServiceSettings({proxy:config.proxy});
